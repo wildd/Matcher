@@ -7,7 +7,7 @@ High Level suggestions:
 1. Leverage database search capabilities
  - MySQL full-text search
  - query database instead of iterating over results
-2. Cache intermidiate results in databse
+2. Cache intermediate results in database
 3. Use regexes sparingly
 4. Use more appropriate database like Elastic Search
 
@@ -17,7 +17,7 @@ TODO
 - Tests (there are none)
 Method Arguments
 Null Pointers
-Naming and style convertions
+Naming and style conversions
 Language Idioms
 Duplication
 Security
@@ -36,13 +36,13 @@ import hashlib
 import unicodedata
 from datetime import datetime
 
-# XXX: useles comment is useless
+# XXX: useless comment is useless
 # XXX: use DB URI strings (following 12factor.net)
 # db
 DB_ARGS = {
     'host': 'localhost',
     'user': 'user',
-# XXX: Keep paswords and sensitive information separate from code
+# XXX: Keep passwords and sensitive information separate from code
     'passwd': 'password',
     'db': 'app',
     'charset': 'utf8',
@@ -74,7 +74,7 @@ ENDINGS = (u's', u'š', u'is', u'us', u'i', u'a', u'u', u'am', u'im', u'um', u'i
            u'ā', u'ī', u'ū', u'os', u'as', u'e', u'es', u'ai', u'ām', u'ei', u'em',
            u'ēm', u'ij', u'īm', u'ās', u'ē', u'ēs', u'īs')
 
-# XXX: Need more context to understand nameing and meaning
+# XXX: Need more context to understand naming and meaning
 WORD_START = r'(\b'
 WORD_END = r'\w*\b)'
 WORD_END_STRICT = r'\b)'
@@ -101,7 +101,7 @@ class Criteria(object):
         self.criterion_surname = row[4]
 
 
-# XXX: docstrings standards
+# XXX: docstrings standards https://www.python.org/dev/peps/pep-0257/
 class MatcherDelete(object):
     '''
     Deletes Matched entries with user filters
@@ -115,7 +115,7 @@ class MatcherDelete(object):
         self._delete_matching(criteriaId)
         # XXX: Uses hidden state self.connection. This would fail if
         # self._connect_db wouldn't be called
-        # XXX: Use context managers to manage tranactions, file oppening etc
+        # XXX: Use context managers to manage transactions, file opening etc
         self.connection.commit()
         self.connection.close()
 
@@ -327,7 +327,7 @@ class Matcher(object):
                 # Matching
                 if match_regex:
                     # XXX: normalization should be done soon as possible.
-                    # Guard your inputs, avoid double cheking down the
+                    # Guard your inputs, avoid double checking down the
                     # abstraction layers
                     # XXX: Store entry normalized
                     matched = re.search(match_regex, self.new_normalize(entry.text.lower()), re.UNICODE)
@@ -338,5 +338,5 @@ class Matcher(object):
                     self._add_criterion_entry(criteria.id, entry.id)
 
 if __name__ == "__main__":
-    # XXX: all module running shabang
+    # XXX: all module running shebang
     Matcher()
