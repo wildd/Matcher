@@ -1,7 +1,5 @@
 #!/usr/bin/env python2.7
 # -*- coding: utf-8 -*-
-# XXX: Use correct shabang string
-# XXX: Use correct encoding string
 """
 High Level suggestions:
 1. Leverage database search capabilities
@@ -23,31 +21,22 @@ Duplication
 Security
 """
 
-# XXX: PEP8 import ordering
+import hashlib
+import re
 import sys
+import os
+import unicodedata
+
+from datetime import datetime
+
+import MySQLdb as mdb
+
 # Stop encoding bullshit in python 2.x
 # 3.x finally fixes this
 reload(sys)
 sys.setdefaultencoding("utf-8")
 
-import MySQLdb as mdb
-import re
-import hashlib
-import unicodedata
-from datetime import datetime
-
-# XXX: useless comment is useless
-# XXX: use DB URI strings (following 12factor.net)
-# db
-DB_ARGS = {
-    'host': 'localhost',
-    'user': 'user',
-# XXX: Keep passwords and sensitive information separate from code
-    'passwd': 'password',
-    'db': 'app',
-    'charset': 'utf8',
-    'use_unicode': 'True'
-}
+DB_URL = os.environ.get('DATABASE_URL', 'mysql://user:password@localhost/db')
 
 CRITERIA_TABLE = 'app_criterion'
 '''
@@ -83,147 +72,92 @@ WORD_START_SIMPLE = r'('
 WORD_END_SIMPLE = r')'
 WORD_SEPARATOR_SIMPLE = r'\s+'
 
-# XXX: Turn into named tuple, because there are no methods. It's simple value
-# object
-class Entry(object):
-    def __init__(self, id, text):
-        self.id = id
-        self.text = text
+from collections import namedtuple
 
-# XXX: Turn into named tuple.
-# XXX: Use unpacking to pass arguments!?
-class Criteria(object):
-    def __init__(self, row):
-        self.id = row[0]
-        self.user_id = row[1]
-        self.pub_date = row[2]
-        self.criterion_name = row[3]
-        self.criterion_surname = row[4]
+Entry = namedtuple('Entry', ['id', 'text'])
+
+Criteria = namedtuple(
+    'Criteria',
+    ['id', 'user_id', 'pub_at', 'name', 'surname'],
+)
 
 
-# XXX: docstrings standards https://www.python.org/dev/peps/pep-0257/
-class MatcherDelete(object):
-    '''
-    Deletes Matched entries with user filters
-    '''
+def db_connect(db_url):
+    try:
+        connection = mdb.connect(db_url)
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception('Error ({}) connecting to DB: {}'.format(type(e), e))
+        raise RuntimeError('Failed to create db connection')
 
-    # XXX: use snake_case for variable names and arguments
-    def __init__(self, criteriaId):
-        # XXX: connection to database should be passed in as argument
-        self._connect_db()
+    return connection
 
-        self._delete_matching(criteriaId)
-        # XXX: Uses hidden state self.connection. This would fail if
-        # self._connect_db wouldn't be called
-        # XXX: Use context managers to manage transactions, file opening etc
-        self.connection.commit()
-        self.connection.close()
 
-    def _connect_db(self):
-        try:
-            # XXX: Using global argument inside method
-            self.connection = mdb.connect(**DB_ARGS)
-        except Exception as e:
-            # XXX: Use logging framework for logging
-            print("Error ({}) connecting to DB: {}".format(type(e), e))
-            # XXX: Create domain specific exception.
-            # XXX: Keep original exception as context 
-            raise RuntimeError("Failed to create db connection")
+def MatcherDelete(conn, criteria_id, match_table):
+    """Deletes Matched entries with user filters.
 
-        # XXX: creating state, that is used only one place
-        self.db = self.connection.cursor()
+    :param conn: Database connection.
+    :param int criteria_id: Criteria ID in database.
+    :param str match_table: Database table name to use to get match.
 
-    def _delete_matching(self, criteriaId):
-        # XXX: security. Don't interpolate SQL query arguments. Pass them in as
-        # second parameter self.db.execute(query_str, query_args)
-        # XXX: MATCH_TABLE global variable in method
-        # XXX: Use consistent string quotations
-        self.db.execute('DELETE FROM {} WHERE (%s)=(%s)'.format(MATCH_TABLE) % ('criterion_id', int(criteriaId)))
+    """
+    query_str = 'DELETE FROM {} WHERE (%s)=(%s)'.format(match_table)
+    cur = conn.cursor()
+    cur.execute(query_str, ('criterion_id', int(criteria_id)))
 
 
 class Matcher(object):
-    '''
-    Matches entries with user criteria
-    '''
-    # XXX: use snake_case
-    def __init__(self, userId=None, criteriaId=None, allDates=None):
-        # XXX: pass in database connection
-        self._connect_db()
+    """Matches entries with user criteria."""
 
-        if allDates is None:
-            allDates = 0
+    def __init__(self, conn, user_id=None, criteria_id=None, all_dates=0):
+        self._conn = conn
+        self.db = self._conn.cursor()
 
         # XXX: why we need this comment?
         # XXX: Is this going to happen on each match?
         # Read all in memory
-        criterias = self._fetch_criteria(CRITERIA_TABLE, userId, criteriaId)
-        entries = self._fetch_entries(ENTRY_TABLE, allDates)
+        self.find_matching(
+            criterias=self._fetch_criteria(CRITERIA_TABLE, user_id, criteria_id),
+            entries=self._fetch_entries(ENTRY_TABLE, all_dates),
+        )
 
-        # XXX: why we don't inline method calls?
-        self.find_matching(criterias, entries)
-        self.connection.commit()
-        self.connection.close()
+    def _fetch_criteria(self, table, user_id, criteria_id):
+        query_str = 'SELECT * FROM {table}'
+        where_cuase_list = []
 
-    # XXX: duplication as MatcherDelete._connect_db
-    def _connect_db(self):
-        try:
-            self.connection = mdb.connect(**DB_ARGS)
-        except Exception as e:
-            print("Error ({}) connecting to DB: {}".format(type(e), e))
-            raise RuntimeError("Failed to create db connection")
+        if user_id:
+             where_cuase_list.append('app_criterion.user_id = {user_id}')
 
-        self.db = self.connection.cursor()
+        if criteria_id:
+            where_cuase_list.append('app_criterion.id = {criteria_id}')
 
-    # XXX: use snake_case
-    def _fetch_criteria(self, table, userId, criteriaId):
-        # XXX: too far from usage
-        criteriaList = []
+        if where_cuase_list:
+            where_cause = ' AND '.join(where_cuase_list)
+            query_str = ' WHERE '.join([query_str, where_cause])
 
-        # XXX: Nested ifs. Remove ifs as much as possible.
-        if userId:
-            if criteriaId:
-                # XXX: don't interpolate SQL query. Use mogrify function provided
-                # by API. That takes care of some interpolation mistakes
-                # XXX: Query string consistency. Use ALL CAPS everywhere
-                sql = "select * from {}\
-                where app_criterion.user_id = {} and app_criterion.id = {}".format(table, userId, criteriaId)
-            else:
-                sql = "select * from {}\
-                where app_criterion.user_id = {}".format(table, userId)
+        self.db.execute(
+            query_str.format(
+                table=table,
+                user_id=user_id,
+                criteria_id=criteria_id,
+            ),
+        )
+        return [Criteria(*row[:5]) for row in self.db.fetchall()]
+
+    def _fetch_entries(self, table, all_dates):
+        if all_dates:
+            query_str = 'SELECT id, entry_text FROM {table}'
         else:
-            sql = "select * from {}".format(table)
+            query_str = """SELECT id, entry_text FROM {table}
+                    WHERE DATEDIFF({table}.pub_date, '{now}') = 0"""
 
-        self.db.execute(sql)
-        rows = self.db.fetchall()
-
-        # XXX: use list comprehension
-        for row in rows:
-            criteriaList.append(Criteria(row))
-
-        # XXX: return directly list comprehension
-        return criteriaList
-
-    # XXX: Use snake_case 
-    def _fetch_entries(self, table, allDates):
-        # XXX: too far from usage point
-        entriesList = []
-
-        # XXX: use mogrify
-        if allDates:
-            sql = "select id, entry_text from {}".format(table)
-        else:
-            sql = "select id, entry_text from {}\
-                    where DATEDIFF({}.pub_date, '{}') = 0".format(table, table, datetime.utcnow().date())
-
-        self.db.execute(sql)
-        rows = self.db.fetchall()
-
-        # XXX: Use list comprehensions
-        for row in rows:
-            # XXX: maybe use unpacking
-            entriesList.append(Entry(row[0], row[1]))
-
-        return entriesList
+        self.db.execute(
+            query_str.format(
+                table=table,
+                now=datetime.utcnow().date(),
+            ),
+        )
+        return [Entry(*row[:3]) for row in self.db.fetchall()]
 
     def _add_criterion_entry(self, criterion_id, entry_id):
         # Check criterion-entry connection doesn't exist in DB already
@@ -278,11 +212,11 @@ class Matcher(object):
         # XXX: Why it's isn't normalized on the spot? It's only place it's used.
         # XXX: merge two loops in one
         # XXX: use list comprehension
-        for word in criteria.criterion_name.lower().split():
+        for word in criteria.name.lower().split():
             # 2) Get root of each word
             all_words.append(self._new_normalize(self._get_word_root(word)))
 
-        for word in criteria.criterion_surname.lower().split():
+        for word in criteria.surname.lower().split():
             all_words.append(self._new_normalize(self._get_word_root(word)))
 
         if not all_words:
@@ -338,5 +272,5 @@ class Matcher(object):
                     self._add_criterion_entry(criteria.id, entry.id)
 
 if __name__ == "__main__":
-    # XXX: all module running shebang
-    Matcher()
+    # XXX: add connection as context manager that finishes trasaction.
+    Matcher(db_connect(DB_URL))
