@@ -8,7 +8,7 @@ High Level suggestions:
 2. Cache intermediate results in database
 3. Use regexes sparingly
 4. Use more appropriate database like Elastic Search
-
+5. Cache as much as possible
 
 TODO
 ====
@@ -118,6 +118,7 @@ class Matcher(object):
 
         # XXX: why we need this comment?
         # XXX: Is this going to happen on each match?
+        # XXX: Add in memmory caching
         # Read all in memory
         self.find_matching(
             criterias=self._fetch_criteria(CRITERIA_TABLE, user_id, criteria_id),
@@ -137,7 +138,6 @@ class Matcher(object):
         for criteria in criterias:
             criteria_regex = self._create_person_regex(criteria)
             for entry in entries:
-                matched = False
                 # XXX: normalization should be done soon as possible.
                 # Guard your inputs, avoid double checking down the
                 # abstraction layers
@@ -194,18 +194,26 @@ class Matcher(object):
         return [Entry(*row[:3]) for row in self.db.fetchall()]
 
     def _add_criterion_entry(self, criterion_id, entry_id):
+        """Create unique hash link for every criterion-entry connection."""
         # Check criterion-entry connection doesn't exist in DB already
-        # XXX: don't interpolate values of SQL query
-        self.db.execute("SELECT * FROM {} WHERE criterion_id = {} and entry_id = {}".format(MATCH_TABLE, criterion_id, entry_id)) 
-        # XXX: inline
-        row = self.db.fetchone()
-        # XXX: maybe explicit else would be required
-        if row is None:
-            # XXX: pull out in separete function
+        self.db.execute("""SELECT * FROM {}
+                WHERE criterion_id = %s AND entry_id = %s""".format(MATCH_TABLE), 
+                (criterion_id, entry_id),
+        )
+
+        if not self.db.fetchone():
             # Create unique hash link for every criterion-entry connection
-            link = hashlib.sha1("/criterions/" + str(criterion_id) + "/entry/" + str(entry_id) + "/").hexdigest()
-            # Add criterion-entry connection
-            self.db.execute("INSERT INTO {} (criterion_id, entry_id, link) VALUES(%s, %s, %s)".format(MATCH_TABLE), (criterion_id, entry_id, link))
+            store_connection(self.db, entry_id, criterion_id)
+            path = '/criterions/{criterion_id}/entry/{entry_id}/'.format(
+                criterion_id=criterion_id,
+                entry_id=entry_id,
+            )
+            link = hashlib.sha1(path).hexdigest()
+            self.db.execute(
+                """INSERT INTO {} (criterion_id, entry_id, link)
+                VALUES(%s, %s, %s)""".format(MATCH_TABLE),
+                (criterion_id, entry_id, link),
+            )
 
     def _create_person_regex(self, criteria):
         """ Split names and surnames in multiple words.
