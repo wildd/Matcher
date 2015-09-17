@@ -26,7 +26,9 @@ import re
 import sys
 import os
 import unicodedata
+import logging
 
+from itertools import chain
 from datetime import datetime
 
 import MySQLdb as mdb
@@ -59,6 +61,7 @@ MATCH_TABLE = 'app_criterionentry'
   `entry_id` int(11) NOT NULL,
 '''
 
+# XXX: ENDING could be sorted by ocurence frequency
 ENDINGS = (u's', u'š', u'is', u'us', u'i', u'a', u'u', u'am', u'im', u'um', u'iem',
            u'ā', u'ī', u'ū', u'os', u'as', u'e', u'es', u'ai', u'ām', u'ei', u'em',
            u'ēm', u'ij', u'īm', u'ās', u'ē', u'ēs', u'īs')
@@ -121,6 +124,35 @@ class Matcher(object):
             entries=self._fetch_entries(ENTRY_TABLE, all_dates),
         )
 
+    def find_matching(self, criterias, entries):
+        """
+        1) Check if name/surname has endings if has, cut them off
+        # kristaps -> kristap; kristapam -> kristap; utt
+        2) Next we create regex for name+space+name+..
+        # "kristaps"; "berzins" -> "kristap"; "berzin" -> "kristap berzin"
+
+        We should have matching against this text and similar texts
+        "Šodien Kristapam Bērziņam ir jāiet uz darbu."
+        """
+        for criteria in criterias:
+            criteria_regex = self._create_person_regex(criteria)
+            for entry in entries:
+                matched = False
+                # XXX: normalization should be done soon as possible.
+                # Guard your inputs, avoid double checking down the
+                # abstraction layers
+                # XXX: Store entry normalized
+                matched = re.search(
+                    criteria_regex,
+                    normalize_ascii(entry.text.lower()),
+                    flags=re.UNICODE,
+                )
+
+                # If matched, create connection @ DB
+                # XXX: Explicit else!?
+                if matched:
+                    self._add_criterion_entry(criteria.id, entry.id)
+
     def _fetch_criteria(self, table, user_id, criteria_id):
         query_str = 'SELECT * FROM {table}'
         where_cuase_list = []
@@ -134,6 +166,8 @@ class Matcher(object):
         if where_cuase_list:
             where_cause = ' AND '.join(where_cuase_list)
             query_str = ' WHERE '.join([query_str, where_cause])
+
+        logging.getLogger(__name__).debug(query_str)
 
         self.db.execute(
             query_str.format(
@@ -173,103 +207,36 @@ class Matcher(object):
             # Add criterion-entry connection
             self.db.execute("INSERT INTO {} (criterion_id, entry_id, link) VALUES(%s, %s, %s)".format(MATCH_TABLE), (criterion_id, entry_id, link))
 
-    # XXX: this isn't part of Matcher's responsiblities. Pull out as separeate
-    # function
-    def _get_word_root(self, word):
-        # XXX: reusing word name
-        eord = unicode(word)
-        # Cut off all possible endings
-        for end in ENDINGS:
-            # XXX: new_word is called stem
-            # XXX: ENDING could be sorted by ocurence frequency
-            # XXX: maybe using str.endswith is quicker thatn reqgex !?
-            new_word = re.sub(end + "$", '', word, re.UNICODE)
-            if new_word != word:
-                break
-        # XXX: use idomatic python. if not new_word
-        if new_word == "":
-            new_word = word
-
-        return new_word
-
-    # text without diacritical chars
-    # XXX: This isn't par to Matcher responsiblilities
-    # XXX: What does _new_normalize means?
-    def _new_normalize(self, text):
-        # XXX: can be inlined
-        text = unicode(text)
-
-        text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore')
-
-        return text
-
     def _create_person_regex(self, criteria):
+        """ Split names and surnames in multiple words.
 
-        all_words = []
+        :returns: Regex string or None when there is no matches
 
-        # 1) Split names and surnames in multiple words
+        """
         # XXX: pull out normalization part
         # XXX: Why it's isn't normalized on the spot? It's only place it's used.
-        # XXX: merge two loops in one
-        # XXX: use list comprehension
-        for word in criteria.name.lower().split():
-            # 2) Get root of each word
-            all_words.append(self._new_normalize(self._get_word_root(word)))
-
-        for word in criteria.surname.lower().split():
-            all_words.append(self._new_normalize(self._get_word_root(word)))
-
-        if not all_words:
-            # If there were no words...
-            # XXX: potential null pointer
-            return
-
-        # Create result regex
-        # XXX: use list comprehension
-        regex_list = []
-        for word_root in all_words:
-            # XXX: using globals from method
-            # XXX: maybe there is separate responsibility MatcherRegexBuilder!?
-            regex_list.append(WORD_START + word_root + WORD_END)
-
-        # XXX: use VCS to keep history
-        #print("regex list: {}".format(regex_list))
+        all_words = [normalize_ascii(word_root(word))
+                     for word in chain(criteria.name.lower().split(),
+                                       criteria.surname.lower().split())]
+        regex_list = [WORD_START + word_root + WORD_END
+                      for word_root in all_words]
+        logging.getLogger(__name__).debug('regex list: %s', regex_list)
         regex = WORD_SEPARATOR.join(regex_list)
-        return regex
+        return regex if regex else None
 
-    # XXX: public method after private methods
-    def find_matching(self, criterias, entries):
-        for criteria in criterias:
-            # XXX: keeping state
-            first = True
-            for entry in entries:
-                matched = False
-                # 1) Check if name/surname has endings
-                # if has, cut them off
-                # kristaps -> kristap; kristapam -> kristap; utt
-                # 2) Next we create regex for name+space+name+..
-                # "kristaps"; "berzins" -> "kristap"; "berzin" -> "kristap berzin"
-                # We should have matching against this text and similar texts
-                # "Šodien Kristapam Bērziņam ir jāiet uz darbu."
 
-                # Create regex only first time we have unique criteria
-                if first:
-                    # XXX: move out of for loop
-                    match_regex = self._create_person_regex(criteria)
-                    first = False
+def word_root(word):
+    for end in ENDINGS:
+        if word.endswith(end) and word != end:
+            return word[:-len(end)]
+    else:
+        return word
 
-                # Matching
-                if match_regex:
-                    # XXX: normalization should be done soon as possible.
-                    # Guard your inputs, avoid double checking down the
-                    # abstraction layers
-                    # XXX: Store entry normalized
-                    matched = re.search(match_regex, self.new_normalize(entry.text.lower()), re.UNICODE)
 
-                # If matched, create connection @ DB
-                # XXX: Explicit else!?
-                if matched:
-                    self._add_criterion_entry(criteria.id, entry.id)
+def normalize_ascii(text):
+    return (unicodedata.normalize('NFKD', unicode(text))
+            .encode('ascii', 'ignore'))
+
 
 if __name__ == "__main__":
     # XXX: add connection as context manager that finishes trasaction.
